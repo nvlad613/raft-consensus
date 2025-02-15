@@ -1,0 +1,3 @@
+-record(log, {
+    size :: integer()
+}).
