@@ -2,7 +2,7 @@
 
 -include("log.hrl").
 
--export([new/0, size/1, last/1, pop/2, commited/1, commit/2, cut/2]).
+-export([new/0, size/1, last/1, pop/2, commited/1, commit/2, cut/2, at/2, push/3]).
 
 new() -> #log{}.
 
