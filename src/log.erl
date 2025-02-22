@@ -2,22 +2,33 @@
 
 -include("log.hrl").
 
--export([new/0, size/1, last/1, pop/2, commited/1, commit/2, cut/2, at/2, push/3]).
+-export([new/0, size/1, last/1, at/2, pop/2, push/3, commited/1, commit/2]).
 
-new() -> #log{}.
+new() -> #log{commited = ?COMMITED_NONE, items = []}.
 
-size(Log) -> 0.
+size(#log{items = Items}) -> length(Items).
 
-last(Log) -> {data, term}.
+last(#log{items = []}) -> none;
+last(#log{items = [Last | _]}) -> Last.
 
-at(Log, Index) -> {data, term}.
+at(#log{items = Items}, Index) when Index >= 0 andalso Index < length(Items) ->
+    lists:nth(length(Items) - Index, Items);
+at(_, _) ->
+    none.
 
-pop(Log, _Count) -> Log.
+pop(#log{commited = Commited, items = Items}, Count) ->
+    #log{commited = Commited, items = lists:nthtail(Count, Items)}.
 
-cut(Log, _Index) -> Log.
+push(#log{commited = Commited, items = Items}, Data, Term) ->
+    #log{commited = Commited, items = [{Data, Term} | Items]}.
 
-push(Log, Data, Term) -> Log.
+commited(#log{commited = Commited, items = Items}) ->
+    case at(#log{items = Items}, Commited) of
+        none -> none;
+        {Data, Term} -> {Commited, Data, Term}
+    end.
 
-commited(Log) -> {index, data, term}.
-
-commit(Log, _Index) -> Log.
+commit(#log{items = Items}, Index) when Index >= 0 andalso Index < length(Items) ->
+    {ok, #log{commited = Index, items = Items}};
+commit(Log, _) ->
+    {err, Log}.
