@@ -41,10 +41,11 @@ handle_event(_Req, StateName, State) ->
 handle_sync_event(_Req, _From, StateName, State) ->
     {noreply, StateName, State}.
 
-idle({add_node, node_name}, State) ->
+idle({add_node, NodeRef}, State) ->
     Nodes = State#node_data.nodes,
-    {next_state, idle, State#node_data{nodes = [{node_name, none} | Nodes]}};
+    {next_state, idle, State#node_data{nodes = [{NodeRef, none} | Nodes]}};
 idle(start, State) ->
+    logger:debug("STARTED"),
     State1 = reset_election_timer(follower, State),
     {next_state, follower, State1}.
 
@@ -63,14 +64,16 @@ follower(
 ) when LeaderTerm =< LocalTerm ->
     {next_state, follower, State};
 follower(
-    {request_vote, {LogIndex, LogTerm}, LeaderTerm, LeaderRef, Label},
+    {request_vote, {LogIndex, LogTerm}, LeaderTerm, LeaderRef, FollowerRef},
     State = #node_data{log = Log}
 ) ->
+    logger:debug("[~s] get request vote from {~s}", FollowerRef, LeaderRef),
     case log_actuality(Log, LogIndex, LogTerm) of
         LessOrEq when LessOrEq == less orelse LessOrEq == equal ->
+            logger:debug("[~s] request vote registered", FollowerRef),
             State1 = reset_election_timer(follower, State),
             State2 = State1#node_data{term = LeaderTerm, leader = LeaderRef},
-            request_vote_response(State2, Label),
+            request_vote_response(State2, FollowerRef),
             {next_state, follower, State2};
         _ ->
             {next_state, follower, State}
@@ -82,6 +85,8 @@ follower(
     {append_entries, {LogIndex, LogTerm}, LeaderTerm, LeaderRef, FollowerRef},
     State = #node_data{log = Log, term = LocalTerm}
 ) when LeaderTerm >= LocalTerm ->
+    logger:debug("[~s] empty append entries from {~s}", FollowerRef, LeaderRef),
+    logger:debug("[~s] STATE : ~p", FollowerRef, log:debug(Log)),
     State1 = reset_election_timer(follower, State),
     State2 = State1#node_data{term = LeaderTerm, leader = LeaderRef},
     UncommitedIndex = log:size(Log) - 1,
@@ -133,6 +138,8 @@ follower(
         FollowerRef},
     State = #node_data{log = Log, term = LocalTerm}
 ) when LeaderTerm >= LocalTerm ->
+    logger:debug("[~s] append entries from {~s}", FollowerRef, LeaderRef),
+    logger:debug("[~s] STATE : ~p", FollowerRef, log:debug(Log)),
     State1 = reset_election_timer(follower, State),
     State2 = State1#node_data{term = LeaderTerm, leader = LeaderRef},
     case log:commited(Log) of
@@ -149,6 +156,7 @@ follower(
 % Candidate sends RequestVote to other nodes
 % On enter state
 candidate(timeout, State) ->
+    logger:debug("[~s] now is a candidate", self()),
     broadcast_request_votes(State),
     State1 = reset_election_timer(candidate, State),
     State2 = reset_broadcast_timer(candidate, State1),
@@ -170,7 +178,7 @@ candidate({tick, candidate}, State = #node_data{term = Term}) ->
     {next_state, candidate, State3#node_data{votes = 1}};
 %
 % On response vote
-candidate({request_vote_response, candidate}, State = #node_data{votes = Votes, nodes = Nodes}) ->
+candidate({request_vote_response, _}, State = #node_data{votes = Votes, nodes = Nodes}) ->
     case Votes + 1 of
         IncVotes when IncVotes >= (length(Nodes) + 2) div 2 ->
             {next_state, leader, State#node_data{votes = 0}, 0};
@@ -186,7 +194,10 @@ leader(timeout, State = #node_data{nodes = Nodes, log = Log, term = Term}) ->
         fun({NodeRef, Timer}) ->
             cancel_timer(Timer),
             Timer1 = erlang:send_after(30, self(), {heartbeat_tick, NodeRef}),
-            NodeRef ! {append_entries, {LogIndex, LogTerm}, Term, self(), NodeRef},
+            gen_fsm:send_event(
+                NodeRef,
+                {append_entries, {LogIndex, LogTerm}, Term, self(), NodeRef}
+            ),
             {NodeRef, Timer1}
         end,
         Nodes
@@ -197,7 +208,10 @@ leader(timeout, State = #node_data{nodes = Nodes, log = Log, term = Term}) ->
 leader({heartbeat_tick, NodeRef}, State = #node_data{nodes = Nodes, log = Log, term = Term}) ->
     Nodes1 = update_node_timer(NodeRef, Nodes),
     {LogIndex, _, LogTerm} = log:commited(Log),
-    NodeRef ! {append_entries, {LogIndex, LogTerm}, Term, self(), NodeRef},
+    gen_fsm:send_event(
+        NodeRef,
+        {append_entries, {LogIndex, LogTerm}, Term, self(), NodeRef}
+    ),
     {next_state, leader, State#node_data{nodes = Nodes1}};
 %
 % On OK heartbeat response
@@ -212,9 +226,11 @@ leader(
             Nodes1 = update_node_timer(BackRef, Nodes),
             State1 = State#node_data{nodes = Nodes1},
             {Data, DataTerm} = log:at(Log, FollowerLogSz),
-            BackRef !
+            gen_fsm:send_event(
+                BackRef,
                 {append_entries, {FollowerIndex, FollowerTerm}, {Data, DataTerm}, Term, self(),
-                    BackRef},
+                    BackRef}
+            ),
             {next_state, leader, State1};
         % add to replicated list; check if can be commited
         LogSz when FollowerIndex =:= Index andalso LogSz =:= FollowerLogSz ->
@@ -229,7 +245,10 @@ leader(
             Nodes1 = update_node_timer(BackRef, Nodes),
             State1 = State#node_data{nodes = Nodes1},
             {_, DataTerm} = log:at(Log, FollowerIndex + 1),
-            BackRef ! {append_entries, {FollowerIndex + 1, DataTerm}, Term, self(), BackRef},
+            gen_fsm:send_event(
+                BackRef,
+                {append_entries, {FollowerIndex + 1, DataTerm}, Term, self(), BackRef}
+            ),
             {next_state, leader, State1};
         _ ->
             {next_state, leader, State}
@@ -245,7 +264,10 @@ leader(
     State1 = State#node_data{nodes = Nodes1},
     case FollowerIndex > Index of
         true ->
-            BackRef ! {append_entries, {Index, LogTerm}, Term, self(), BackRef},
+            gen_fsm:send_event(
+                BackRef,
+                {append_entries, {Index, LogTerm}, Term, self(), BackRef}
+            ),
             {next_state, leader, State1};
         false ->
             case log:at(Log, FollowerIndex) of
@@ -254,7 +276,8 @@ leader(
                     FollowerIndex < Index andalso TermAtFollowerIndex =:= FollowerTerm
                 ->
                     DataAndTerm = log:at(Log, FollowerIndex + 1),
-                    BackRef !
+                    gen_fsm:send_event(
+                        BackRef,
                         {
                             append_entries_data,
                             {FollowerIndex, FollowerTerm},
@@ -262,18 +285,21 @@ leader(
                             Term,
                             self(),
                             BackRef
-                        },
+                        }
+                    ),
                     {next_state, leader, State1};
                 % move follower index back
                 {_, TermAtFollowerIndex} when TermAtFollowerIndex /= FollowerTerm ->
-                    BackRef !
+                    gen_fsm:send_event(
+                        BackRef,
                         {
                             append_entries,
                             {FollowerIndex - 1, FollowerTerm},
                             Term,
                             self(),
                             BackRef
-                        },
+                        }
+                    ),
                     {next_state, leader, State1}
             end
     end;
@@ -301,7 +327,7 @@ update_node_timer(NodeRef, Nodes) ->
         fun
             ({CurrentNodeRef, Timer}) when CurrentNodeRef =:= NodeRef ->
                 cancel_timer(Timer),
-                Timer1 = erlang:send_after(30, self(), {heartbeat_tick, NodeRef}),
+                Timer1 = gen_fsm:send_event_after(30, self(), {heartbeat_tick, NodeRef}),
                 {true, {CurrentNodeRef, Timer1}};
             (NodeAddress) ->
                 {false, NodeAddress}
@@ -313,7 +339,10 @@ broadcast_request_votes(#node_data{log = Log, term = Term, nodes = Nodes}) ->
     {LogIndex, _, LogTerm} = log:commited(Log),
     lists:foreach(
         fun({NodeRef, _}) ->
-            NodeRef ! {request_vote, {LogIndex, LogTerm}, Term, self(), NodeRef}
+            gen_fsm:send_event(
+                NodeRef,
+                {request_vote, {LogIndex, LogTerm}, Term, self(), NodeRef}
+            )
         end,
         Nodes
     ).
@@ -322,7 +351,14 @@ append_entries_response(#node_data{log = Log, leader = Leader}, Status, Label) -
     {Index, _, Term} = log:commited(Log),
     gen_fsm:send_event(
         Leader,
-        {append_entries_response, Status, Index, Term, log:size(Log), Label}
+        {
+            append_entries_response,
+            Status,
+            Index,
+            Term,
+            log:size(Log),
+            Label
+        }
     ).
 
 request_vote_response(#node_data{leader = Leader}, Label) ->
@@ -331,16 +367,16 @@ request_vote_response(#node_data{leader = Leader}, Label) ->
 reset_election_timer(MachineState, State) ->
     Time = 149 + rand:uniform(151),
     cancel_timer(State#node_data.timer),
-    Timer = erlang:send_after(Time, self(), {tick, MachineState}),
+    Timer = gen_fsm:send_event_after(Time, {tick, MachineState}),
     State#node_data{timer = Timer}.
 
 reset_broadcast_timer(MachineState, State) ->
     cancel_timer(State#node_data.broadcast_timer),
-    Timer = erlang:send_after(30, self(), {broadcast_tick, MachineState}),
+    Timer = gen_fsm:send_event_after(30, {broadcast_tick, MachineState}),
     State#node_data{broadcast_timer = Timer}.
 
 cancel_timer(Timer) ->
     case Timer of
         none -> ok;
-        TimerRef -> erlang:cancel_timer(TimerRef)
+        TimerRef -> gen_fsm:cancel_timer(TimerRef)
     end.

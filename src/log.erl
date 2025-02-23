@@ -2,9 +2,12 @@
 
 -include("log.hrl").
 
--export([new/0, size/1, last/1, at/2, pop/2, push/3, commited/1, commit/2]).
+-export([new/0, size/1, last/1, at/2, pop/2, push/3, commited/1, commit/2, cut/2, debug/1]).
 
 new() -> #log{commited = ?COMMITED_NONE, items = []}.
+
+debug(#log{items = Items}) ->
+    Items.
 
 size(#log{items = Items}) -> length(Items).
 
@@ -19,12 +22,15 @@ at(_, _) ->
 pop(#log{commited = Commited, items = Items}, Count) ->
     #log{commited = Commited, items = lists:nthtail(Count, Items)}.
 
+cut(Log, Index) ->
+    pop(Log, log:size(Log) - 1 - Index).
+
 push(#log{commited = Commited, items = Items}, Data, Term) ->
     #log{commited = Commited, items = [{Data, Term} | Items]}.
 
 commited(#log{commited = Commited, items = Items}) ->
     case at(#log{items = Items}, Commited) of
-        none -> none;
+        none -> {-1, none, 0};
         {Data, Term} -> {Commited, Data, Term}
     end.
 
