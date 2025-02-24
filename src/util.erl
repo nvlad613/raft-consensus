@@ -9,5 +9,19 @@ append_if_not_present(List, Item) ->
     end.
 
 set_up_logger() ->
-    Config = #{config => #{file => "logs/app.log"}, level => debug},
-    logger:add_handler(to_file_handler, logger_std_h, Config).
+    logger:remove_handler(default),
+    logger:set_primary_config(level, debug),
+    logger:add_handler(console_handler, logger_std_h, #{
+        level => debug,
+        formatter => {logger_formatter, #{
+            template => [time, " ", level, ": ", msg, "\n"]
+        }},
+        config => #{type => standard_io}
+    }),
+    logger:add_handler(file_handler, logger_std_h, #{
+        level => debug,
+        formatter => {logger_formatter, #{
+            template => [time, " ", level, ": ", msg, "\n"]
+        }},
+        config => #{type => file, file => "logs/app.log"}
+    }).
