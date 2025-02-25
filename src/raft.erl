@@ -325,7 +325,9 @@ leader(
                     logger:debug("[~p] commit at index ~p; LOG: ~p", [
                         State#node_data.self_name, LogSz - 1, log:debug(Log1)
                     ]),
-                    {next_state, leader, State#node_data{replicated_list = [], log = Log1}}
+                    {next_state, leader, State#node_data{replicated_list = [], log = Log1}};
+                _ ->
+                    {next_state, leader, State#node_data{replicated_list = ReplicatedList1}}
             end;
         % attempt to move follower index on
         _ when FollowerIndex < Index ->
@@ -403,10 +405,12 @@ leader({broadcast_tick, _}, State) ->
     {next_state, leader, State};
 %
 % Ignore late request votes / request vote responses
+leader({request_vote, _, _, _, _}, State) ->
+    {next_state, leader, State};
 leader({request_vote_response, _}, State) ->
     {next_state, leader, State}.
 
-% response with log snapshot
+% Make a log snapshot
 handle_sync_event(
     log_snapshot,
     _From,
@@ -414,6 +418,16 @@ handle_sync_event(
     State = #node_data{snapshot_creator = SnapshotCreatorRef, log = Log}
 ) ->
     Snapshot = gen_server:call(SnapshotCreatorRef, {make_snapshot, Log, log:size(Log) - 1}),
+    {reply, Snapshot, StateName, State};
+%
+% Snapshot with custom provider
+handle_sync_event(
+    {log_snapshot, Provider},
+    _From,
+    StateName,
+    State = #node_data{log = Log}
+) ->
+    Snapshot = gen_server:call(Provider, {make_snapshot, Log, log:size(Log) - 1}),
     {reply, Snapshot, StateName, State}.
 
 handle_event({client_add_data, Data}, StateName, State = #node_data{leader = Leader}) ->

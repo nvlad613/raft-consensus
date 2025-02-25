@@ -1,12 +1,9 @@
--module(log_concat).
+-module(concat_str_provider).
 -behaviour(gen_server).
 
 -include("./log.hrl").
 
-%% API
 -export([start_link/0]).
-
-%% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 %% API Functions
@@ -24,9 +21,7 @@ handle_call({make_snapshot, Log, Index}, _From, State) ->
             Index < 0 orelse Index > MaxIndex ->
                 {error, invalid_index};
             true ->
-                %% Собираем элементы до указанного индекса
                 Log1 = log:cut(Log, Index),
-                %% Фильтруем и конкатенируем строки
                 Result = lists:foldr(
                     fun(Elem, Acc) ->
                         case Elem of

@@ -9,7 +9,15 @@
     ]}
 ]).
 
--export([add_node/2, start_follower/1, send_data/2, start_node/2, init_cluster/1, get_snapshot/1]).
+-export([
+    add_node/2,
+    start_follower/1,
+    send_data/2,
+    start_node/2,
+    init_cluster/1, init_cluster/2,
+    make_snapshot/1,
+    make_snapshot/2
+]).
 
 start_node(NodeName, SnapshotServerRef) ->
     case whereis(NodeName) of
@@ -29,14 +37,19 @@ start_follower(NodeRef) ->
 send_data(NodeRef, Data) ->
     gen_fsm:send_all_state_event(NodeRef, {client_add_data, Data}).
 
-get_snapshot(NodeRef) ->
+make_snapshot(NodeRef) ->
     gen_fsm:sync_send_all_state_event(NodeRef, log_snapshot).
 
-init_cluster(Nodes) ->
-    util:set_up_logger(),
-    log_concat:start_link(),
+make_snapshot(NodeRef, Provider) ->
+    gen_fsm:sync_send_all_state_event(NodeRef, {log_snapshot, Provider}).
 
-    lists:foreach(fun(Node) -> start_node(Node, log_concat) end, Nodes),
+init_cluster(Nodes) ->
+    init_cluster(Nodes, concat_str_provider).
+init_cluster(Nodes, SnapshotProdiver) ->
+    util:set_up_logger(),
+    gen_server:start_link({local, SnapshotProdiver}, SnapshotProdiver, [], []),
+
+    lists:foreach(fun(Node) -> start_node(Node, SnapshotProdiver) end, Nodes),
     lists:foreach(
         fun(TargetNode) ->
             Others = lists:delete(TargetNode, Nodes),
