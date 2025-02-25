@@ -10,8 +10,10 @@
 ]).
 
 -behaviour(gen_fsm).
-
 -export([handle_event/3, handle_sync_event/4, init/1, idle/2, follower/2, candidate/2, leader/2]).
+
+-define(ELECTION_TIMEOUT, 150).
+-define(HEARTBEAT_PERIOD, 30).
 
 -include("log.hrl").
 -type timer_ref() :: reference().
@@ -269,14 +271,12 @@ leader(timeout, State = #node_data{nodes = Nodes, log = Log, term = Term}) ->
     Nodes1 = lists:map(
         fun({NodeRef, Timer}) ->
             cancel_timer(Timer),
-            Timer1 = gen_fsm:send_event_after(30, {heartbeat_tick, NodeRef}),
+            Timer1 = gen_fsm:send_event_after(?HEARTBEAT_PERIOD, {heartbeat_tick, NodeRef}),
             gen_fsm:send_event(
                 NodeRef,
                 {append_entries, {LogIndex, LogTerm}, Term, self(), NodeRef}
             ),
-            logger:debug("[~p] append entries request for {~p}", [
-                State#node_data.self_name, NodeRef
-            ]),
+            logger:debug("[~p] sent heartbeat to {~p}", [State#node_data.self_name, NodeRef]),
             {NodeRef, Timer1}
         end,
         Nodes
@@ -291,6 +291,7 @@ leader({heartbeat_tick, NodeRef}, State = #node_data{nodes = Nodes, log = Log, t
         NodeRef,
         {append_entries, {LogIndex, LogTerm}, Term, self(), NodeRef}
     ),
+    logger:debug("[~p] sent heartbeat to {~p}", [State#node_data.self_name, NodeRef]),
     {next_state, leader, State#node_data{nodes = Nodes1}};
 %
 % On OK heartbeat response
@@ -366,19 +367,11 @@ leader(
                 {_, TermAtFollowerIndex} when
                     FollowerIndex < Index andalso TermAtFollowerIndex =:= FollowerTerm
                 ->
-                    logger:debug("[~p] replicate commited", [State#node_data.self_name]),
-                    DataAndTerm = log:at(Log, FollowerIndex + 1),
-                    gen_fsm:send_event(
-                        BackRef,
-                        {
-                            append_entries,
-                            {FollowerIndex, FollowerTerm},
-                            DataAndTerm,
-                            Term,
-                            self(),
-                            BackRef
-                        }
-                    ),
+                    replicate_commited(State1, {FollowerIndex, FollowerTerm}, BackRef),
+                    {next_state, leader, State1};
+                % when follower log is empty
+                none ->
+                    replicate_commited(State1, {FollowerIndex, FollowerTerm}, BackRef),
                     {next_state, leader, State1};
                 % move follower index back
                 {_, TermAtFollowerIndex} when TermAtFollowerIndex /= FollowerTerm ->
@@ -399,6 +392,7 @@ leader(
 %
 % Client add new data
 leader({add_data, Data}, State = #node_data{log = Log, term = Term}) ->
+    logger:debug("[~p] {~p} pushed to leader log", [State#node_data.self_name, Data]),
     Log1 = log:push(Log, Data, Term),
     {next_state, leader, State#node_data{log = Log1, replicated_list = []}};
 %
@@ -406,6 +400,10 @@ leader({add_data, Data}, State = #node_data{log = Log, term = Term}) ->
 leader({tick, _}, State) ->
     {next_state, leader, State};
 leader({broadcast_tick, _}, State) ->
+    {next_state, leader, State};
+%
+% Ignore late request votes / request vote responses
+leader({request_vote_response, _}, State) ->
     {next_state, leader, State}.
 
 % response with log snapshot
@@ -427,6 +425,23 @@ handle_event({client_add_data, Data}, StateName, State = #node_data{leader = Lea
     end,
     {next_state, StateName, State}.
 
+replicate_commited(
+    #node_data{log = Log, self_name = SelfName, term = Term}, {FollowerIndex, FollowerTerm}, BackRef
+) ->
+    logger:debug("[~p] replicate commited", [SelfName]),
+    DataAndTerm = log:at(Log, FollowerIndex + 1),
+    gen_fsm:send_event(
+        BackRef,
+        {
+            append_entries,
+            {FollowerIndex, FollowerTerm},
+            DataAndTerm,
+            Term,
+            self(),
+            BackRef
+        }
+    ).
+
 log_actuality(Log, OtherLogIndex, OtherLogTerm) ->
     case log:commited(Log) of
         {_, _, LogTerm} when LogTerm < OtherLogTerm ->
@@ -442,14 +457,16 @@ log_actuality(Log, OtherLogIndex, OtherLogTerm) ->
     end.
 
 update_node_timer(NodeRef, Nodes) ->
-    lists:filtermap(
+    lists:map(
         fun
             ({CurrentNodeRef, Timer}) when CurrentNodeRef =:= NodeRef ->
-                cancel_timer(Timer),
-                Timer1 = gen_fsm:send_event_after(30, {heartbeat_tick, NodeRef}),
-                {true, {CurrentNodeRef, Timer1}};
-            (NodeAddress) ->
-                {false, NodeAddress}
+                CancelResult = cancel_timer(Timer),
+                logger:debug("[~p] ~p TIMER cancelation: ~p", [self(), NodeRef, CancelResult]),
+                Timer1 = gen_fsm:send_event_after(?HEARTBEAT_PERIOD, {heartbeat_tick, NodeRef}),
+                logger:debug("[~p] ~p TIMER: ~p", [self(), NodeRef, Timer1]),
+                {CurrentNodeRef, Timer1};
+            (Item) ->
+                Item
         end,
         Nodes
     ).
@@ -484,14 +501,14 @@ request_vote_response(#node_data{leader = Leader}, Label) ->
     gen_fsm:send_event(Leader, {request_vote_response, Label}).
 
 reset_election_timer(MachineState, State) ->
-    Time = 149 + rand:uniform(151),
+    Time = ?ELECTION_TIMEOUT - 1 + rand:uniform(?ELECTION_TIMEOUT + 1),
     cancel_timer(State#node_data.timer),
     Timer = gen_fsm:send_event_after(Time, {tick, MachineState}),
     State#node_data{timer = Timer}.
 
 reset_broadcast_timer(MachineState, State) ->
     cancel_timer(State#node_data.broadcast_timer),
-    Timer = gen_fsm:send_event_after(30, {broadcast_tick, MachineState}),
+    Timer = gen_fsm:send_event_after(?HEARTBEAT_PERIOD, {broadcast_tick, MachineState}),
     State#node_data{broadcast_timer = Timer}.
 
 cancel_timer(Timer) ->
