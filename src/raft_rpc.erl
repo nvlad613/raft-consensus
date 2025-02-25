@@ -28,6 +28,7 @@ start_node(NodeName, SnapshotServerRef) ->
         Pid ->
             {error, {already_started, Pid}}
     end.
+
 add_node(TargetNode, NodeToAdd) ->
     gen_fsm:send_event(TargetNode, {add_node, NodeToAdd}).
 

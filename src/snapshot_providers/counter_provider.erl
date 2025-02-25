@@ -1,7 +1,7 @@
 -module(counter_provider).
 -behaviour(gen_server).
 
--include("./log.hrl").
+-include("log.hrl").
 
 %% API
 -export([start_link/0]).
