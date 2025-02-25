@@ -1,0 +1,21 @@
+name: erlang
+
+on: push
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    container:
+      image: erlang:27
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: compile
+        working-directory: ${{github.workspace}}
+        run: rebar3 compile
+
+      - name: test
+        working-directory: ${{github.workspace}}
+        run: rebar3 eunit

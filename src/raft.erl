@@ -12,28 +12,7 @@
 -behaviour(gen_fsm).
 -export([handle_event/3, handle_sync_event/4, init/1, idle/2, follower/2, candidate/2, leader/2]).
 
--define(ELECTION_TIMEOUT, 150).
--define(HEARTBEAT_PERIOD, 30).
-
--include("log.hrl").
--type timer_ref() :: reference().
--type node_address() :: {identifier(), timer_ref() | none()}.
-
--record(node_data, {
-    % DEBUG ONLY
-    self_name :: atom(),
-
-    log :: #log{},
-    snapshot_creator :: identifier(),
-    term :: integer(),
-    nodes :: [node_address()],
-    leader :: identifier() | none(),
-    timer :: timer_ref() | none(),
-    broadcast_timer :: timer_ref() | none(),
-    votes :: integer(),
-    % Replicated last log entry nodes
-    replicated_list :: [identifier()]
-}).
+-include("raft.hrl").
 
 init([Log, InitialState, SnapshotCreatorRef]) ->
     {_, _, Term} = log:commited(Log),
