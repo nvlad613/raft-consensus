@@ -12,16 +12,18 @@ set_up_logger() ->
     logger:remove_handler(default),
     logger:set_primary_config(level, debug),
     logger:add_handler(console_handler, logger_std_h, #{
-        level => debug,
-        formatter => {logger_formatter, #{
-            template => [time, " ", level, ": ", msg, "\n"]
-        }},
+        level => info,
+        formatter =>
+            {logger_formatter, #{
+                template => [time, " ", level, ": ", msg, "\n"]
+            }},
         config => #{type => standard_io}
     }),
     logger:add_handler(file_handler, logger_std_h, #{
         level => debug,
-        formatter => {logger_formatter, #{
-            template => [time, " ", level, ": ", msg, "\n"]
-        }},
-        config => #{type => file, file => "logs/app.log"}
+        formatter =>
+            {logger_formatter, #{
+                template => [time, " ", level, ": ", msg, "\n"]
+            }},
+        config => #{type => file, file => "logs/debug.log"}
     }).

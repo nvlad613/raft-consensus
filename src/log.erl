@@ -6,8 +6,12 @@
 
 new() -> #log{commited = ?COMMITED_NONE, items = []}.
 
-debug(#log{items = Items}) ->
-    Items.
+debug(#log{items = Items, commited = Commited}) ->
+    IndexedList = lists:zip(lists:seq(0, length(Items) - 1), Items),
+    DebugList = lists:map(
+        fun({Index, {Data, Term}}) -> {Commited >= Index, Term, Data} end, IndexedList
+    ),
+    {Commited, DebugList}.
 
 size(#log{items = Items}) -> length(Items).
 
